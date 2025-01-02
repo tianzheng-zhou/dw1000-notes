@@ -127,18 +127,26 @@ void DW1000Class::select(uint8_t ss) {
 	writeNetworkIdAndDeviceAddress();
 	
 	// default system configuration
-	//将_syscfg寄存器清零
+	//将_syscfg (0x04) 寄存器清零
 	memset(_syscfg, 0, LEN_SYS_CFG);
 
-	setDoubleBuffering(false);
-	setInterruptPolarity(true);
-	writeSystemConfigurationRegister();
+	setDoubleBuffering(false);  // disable 双缓冲（也就是禁用接收缓存，详见数据手册） bit-12
+	setInterruptPolarity(true);	// bit-9 设置irq输出极性 也就是设置irq输出高电平或者低电平
+	writeSystemConfigurationRegister();	//将_syscfg 写入0x04寄存器
+	
 	// default interrupt mask, i.e. no interrupts
-	clearInterrupts();
-	writeSystemEventMaskRegister();
+	clearInterrupts(); //sysmask
+	/*寄存器映射寄存器文件 0x0E 是系统事件掩码寄存器。 这些与事件状态一致
+	SYS_STATUS 寄存器中的位。 每当 SYS_MASK 中的某个位被置位（到 1），并且相应的被
+	置位 SYS_STATUS 寄存器也被置位，然后产生一个中断来产生硬件 IRQ 输出
+	线。 详见数据手册第七章
+	*/
+	writeSystemEventMaskRegister(); //将_sysmask 写入0x0E寄存器
+	
 	// load LDE micro-code
-	enableClock(XTI_CLOCK);
+	enableClock(XTI_CLOCK); //fotce the system to the 19.2MHz XTL clock
 	delay(5);
+
 	manageLDE();
 	delay(5);
 	enableClock(AUTO_CLOCK);
@@ -206,10 +214,27 @@ void DW1000Class::manageLDE() {
 	writeBytes(PMSC, PMSC_CTRL0_SUB, pmscctrl0, 2);
 }
 
+/**
+ * @brief 启用DW1000芯片的时钟
+ * 设置时钟的寄存器为0x36
+ * 
+ * @param clock 指定要启用的时钟类型，可以是AUTO_CLOCK、XTI_CLOCK或PLL_CLOCK
+ * 
+ * AUTO - The system clock will run off the 19.2 MHz XTI clock until the PLL is calibrated
+ * and locked, then it will switch over the 125 MHz PLL clock.
+ * 
+ * XTI - Force system clock to be the 19.2 MHz XTI clock.
+ * 
+ * PLL - Force system clock to the 125 MHz PLL clock. (If this clock is not present the DW1000
+ * will essentially lock up with further SPI communications impossible. In this case an
+ * external reset will be needed to recover)
+ * （摘自用户手册）
+ */
 void DW1000Class::enableClock(byte clock) {
 	byte pmscctrl0[LEN_PMSC_CTRL0];
-	memset(pmscctrl0, 0, LEN_PMSC_CTRL0);
-	readBytes(PMSC, PMSC_CTRL0_SUB, pmscctrl0, LEN_PMSC_CTRL0);
+	memset(pmscctrl0, 0, LEN_PMSC_CTRL0);//将pmscctrl0清零
+	readBytes(PMSC, PMSC_CTRL0_SUB, pmscctrl0, LEN_PMSC_CTRL0); //读取0x36中的0x00子地址的值并传入pmscctrl0
+	//用于修改区域SYSCLKS
 	if(clock == AUTO_CLOCK) {
 		_currentSPI = &_fastSPI;
 		pmscctrl0[0] = AUTO_CLOCK;
@@ -225,7 +250,7 @@ void DW1000Class::enableClock(byte clock) {
 	} else {
 		// TODO deliver proper warning
 	}
-	writeBytes(PMSC, PMSC_CTRL0_SUB, pmscctrl0, 2);
+	writeBytes(PMSC, PMSC_CTRL0_SUB, pmscctrl0, 2);//将pmscctrl0写入0x36中的0x00的子地址
 }
 
 void DW1000Class::enableDebounceClock() {
@@ -1723,8 +1748,8 @@ void DW1000Class::readBytesOTP(uint16_t address, byte data[]) {
 	
 	// p60 - 6.3.3 Reading a value from OTP memory
 	// bytes of address
-	addressBytes[0] = (address & 0xFF);
-	addressBytes[1] = ((address >> 8) & 0xFF);
+	addressBytes[0] = (address & 0xFF); //取低位
+	addressBytes[1] = ((address >> 8) & 0xFF); //取高位
 	// set address
 	writeBytes(OTP_IF, OTP_ADDR_SUB, addressBytes, LEN_OTP_ADDR);
 	// switch into read mode
