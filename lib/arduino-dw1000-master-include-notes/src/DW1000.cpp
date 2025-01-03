@@ -13,7 +13,7 @@ DW1000Class DW1000;
  * ######################################################################### */
 // pins
 uint8_t DW1000Class::_ss;
-uint8_t DW1000Class::_rst;
+uint8_t DW1000Class::_rst; //rst pin
 uint8_t DW1000Class::_irq;
 
 
@@ -27,11 +27,11 @@ void (* DW1000Class::_handleReceiveTimestampAvailable)(void) = 0;
 
 // registers
 byte       DW1000Class::_syscfg[LEN_SYS_CFG];  //register 0x04
-byte       DW1000Class::_sysctrl[LEN_SYS_CTRL];
-byte       DW1000Class::_sysstatus[LEN_SYS_STATUS];
-byte       DW1000Class::_txfctrl[LEN_TX_FCTRL];
+byte       DW1000Class::_sysctrl[LEN_SYS_CTRL]; //register 0x0D
+byte       DW1000Class::_sysstatus[LEN_SYS_STATUS]; //0x0F
+byte       DW1000Class::_txfctrl[LEN_TX_FCTRL]; //register 0x08
 byte       DW1000Class::_sysmask[LEN_SYS_MASK];
-byte       DW1000Class::_chanctrl[LEN_CHAN_CTRL];
+byte       DW1000Class::_chanctrl[LEN_CHAN_CTRL]; //register 0x1F
 byte       DW1000Class::_networkAndAddress[LEN_PANADR];  //register 0x03
 
 // monitoring
@@ -147,7 +147,9 @@ void DW1000Class::select(uint8_t ss) {
 	enableClock(XTI_CLOCK); //fotce the system to the 19.2MHz XTL clock
 	delay(5);
 
+	//TODO 细节没有看，好像是管理LDE模块（用于计算信号传递延迟）
 	manageLDE();
+
 	delay(5);
 	enableClock(AUTO_CLOCK);
 	delay(5);
@@ -187,6 +189,12 @@ void DW1000Class::begin(uint8_t irq, uint8_t rst) {
 	attachInterrupt(digitalPinToInterrupt(_irq), DW1000Class::handleInterrupt, RISING); // todo interrupt for ESP8266
 }
 
+/*
+LDE 是指 "Linear Delay Estimator"，即线性延迟估计器。
+在DW1000芯片中，LDE是一个用于计算信号传播延迟的硬件模块。
+它通过测量信号在发送和接收之间的时间差来估计距离，
+这是基于超宽带（UWB）技术的定位系统中的关键功能之一。
+*/
 void DW1000Class::manageLDE() {
 	// transfer any ldo tune values
 	byte ldoTune[LEN_OTP_RDAT];
@@ -254,15 +262,38 @@ void DW1000Class::enableClock(byte clock) {
 }
 
 void DW1000Class::enableDebounceClock() {
+	//初始化这个数组
 	byte pmscctrl0[LEN_PMSC_CTRL0];
 	memset(pmscctrl0, 0, LEN_PMSC_CTRL0);
+
 	readBytes(PMSC, PMSC_CTRL0_SUB, pmscctrl0, LEN_PMSC_CTRL0);
+
+	//GPIO De-bounce Clock Enable.
+	/*
+	GPIO De-bounce Clock 是一种用于去抖动（debounce）GPIO（通用输入输出）引脚的时钟信号。
+	在电子电路中，当机械开关或按钮连接到GPIO引脚时，由于机械触点的弹跳（bounce）现象，
+	可能会导致引脚电平在短时间内多次变化，从而产生错误的触发信号。
+	为了解决这个问题，通常会使用去抖动技术。
+
+	去抖动时钟的作用是在检测到GPIO引脚电平变化后，延迟一段时间再进行采样，以确保电平已经稳定。
+	这个延迟时间通常由去抖动时钟的频率决定。
+	通过这种方式，可以过滤掉由于触点弹跳引起的虚假电平变化，从而得到稳定可靠的输入信号。
+	*/
+	//这个时钟时钟是一个kilohertz时钟 似乎也和LED有关系
 	setBit(pmscctrl0, LEN_PMSC_CTRL0, GPDCE_BIT, 1);
+
+	/*
+	Kilohertz clock Enable.  When this bit is set to 1 it enables the divider. 
+	The divider value is set by KHZCLKDIV in Sub-Register 0x36:04 – PMSC_CTRL1. 
+	启用kilohertz clock和分频器 分频系数由其他寄存器的值设置
+	*/
 	setBit(pmscctrl0, LEN_PMSC_CTRL0, KHZCLKEN_BIT, 1);
+
 	writeBytes(PMSC, PMSC_CTRL0_SUB, pmscctrl0, LEN_PMSC_CTRL0);
         _debounceClockEnabled = true;
 }
 
+//既然是LED那就不管了
 void DW1000Class::enableLedBlinking() {
 	byte pmscledc[LEN_PMSC_LEDC];
 	memset(pmscledc, 0, LEN_PMSC_LEDC);
@@ -271,9 +302,11 @@ void DW1000Class::enableLedBlinking() {
 	writeBytes(PMSC, PMSC_LEDC_SUB, pmscledc, LEN_PMSC_LEDC);
 }
 
+//没什么好说的 就是用来改GPIO的功能 详见用户手册
 void DW1000Class::setGPIOMode(uint8_t msgp, uint8_t mode) {
 	byte gpiomode[LEN_GPIO_MODE];
 	memset(gpiomode, 0, LEN_GPIO_MODE);
+
 	readBytes(GPIO_CTRL, GPIO_MODE_SUB, gpiomode, LEN_GPIO_MODE);
 	for (char i = 0; i < 2; i++){
 		setBit(gpiomode, LEN_GPIO_MODE, msgp + i, (mode >> i) & 1);
@@ -281,6 +314,7 @@ void DW1000Class::setGPIOMode(uint8_t msgp, uint8_t mode) {
 	writeBytes(GPIO_CTRL, GPIO_MODE_SUB, gpiomode, LEN_GPIO_MODE);
 }
 
+// 暂时用不到
 void DW1000Class::deepSleep() {
 	byte aon_wcfg[LEN_AON_WCFG];
 	memset(aon_wcfg, 0, LEN_AON_WCFG);
@@ -322,7 +356,7 @@ void DW1000Class::spiWakeup(){
         }
 }
 
-
+//字面意思
 void DW1000Class::reset() {
 	if(_rst == 0xff) {
 		softReset();
@@ -339,26 +373,42 @@ void DW1000Class::reset() {
 }
 
 void DW1000Class::softReset() {
-	byte pmscctrl0[LEN_PMSC_CTRL0];
+
+	/*
+	These bits should be cleared to zero to force a reset 
+	and then returned to one for normal operation. 
+	The correct procedure to achieve this reset is to:  
+ 
+	(a) Set SYSCLKS to 01  
+	(b) Clear SOFTRESET to all zero’s  
+	(c) Set SOFTRESET to all ones  
+
+	参考用户手册
+	*/
+	
+	byte pmscctrl0[LEN_PMSC_CTRL0]; // 4字节
 	readBytes(PMSC, PMSC_CTRL0_SUB, pmscctrl0, LEN_PMSC_CTRL0);
-	pmscctrl0[0] = 0x01;
+
+	pmscctrl0[0] = 0x01; // (a) Set SYSCLKS to 01  
 	writeBytes(PMSC, PMSC_CTRL0_SUB, pmscctrl0, LEN_PMSC_CTRL0);
-	pmscctrl0[3] = 0x00;
+	pmscctrl0[3] = 0x00; // (b) Clear SOFTRESET to all zero’s  
 	writeBytes(PMSC, PMSC_CTRL0_SUB, pmscctrl0, LEN_PMSC_CTRL0);
 	delay(10);
-	pmscctrl0[0] = 0x00;
-	pmscctrl0[3] = 0xF0;
+	pmscctrl0[0] = 0x00; // return SYSCLKS to AUTO mode
+	pmscctrl0[3] = 0xF0; // (c) Set SOFTRESET to all ones  
 	writeBytes(PMSC, PMSC_CTRL0_SUB, pmscctrl0, LEN_PMSC_CTRL0);
 	// force into idle mode
 	idle();
 }
 
+//这个函数只是对本地数据进行操作 并没有写入寄存器
 void DW1000Class::enableMode(const byte mode[]) {
-	setDataRate(mode[0]);
+	setDataRate(mode[0]); //0:110k  1:850k  2:6.8m
 	setPulseFrequency(mode[1]);
 	setPreambleLength(mode[2]);
 }
 
+// 大概都是一些默认配置 不用去动他
 void DW1000Class::tune() {
 	// these registers are going to be tuned/configured
 	byte agctune1[LEN_AGC_TUNE1];
@@ -379,7 +429,10 @@ void DW1000Class::tune() {
 	byte fspllcfg[LEN_FS_PLLCFG];
 	byte fsplltune[LEN_FS_PLLTUNE];
 	byte fsxtalt[LEN_FS_XTALT];
+
+	// 这些AGC看上去就只是一些默认的配置，不用去动他
 	// AGC_TUNE1
+	// 根据脉冲发射频率来调节agctune1
 	if(_pulseFrequency == TX_PULSE_FREQ_16MHZ) {
 		writeValueToBytes(agctune1, 0x8870, LEN_AGC_TUNE1);
 	} else if(_pulseFrequency == TX_PULSE_FREQ_64MHZ) {
@@ -391,6 +444,8 @@ void DW1000Class::tune() {
 	writeValueToBytes(agctune2, 0x2502A907L, LEN_AGC_TUNE2);
 	// AGC_TUNE3
 	writeValueToBytes(agctune3, 0x0035, LEN_AGC_TUNE3);
+
+	//保持默认即可
 	// DRX_TUNE0b (already optimized according to Table 20 of user manual)
 	if(_dataRate == TRX_RATE_110KBPS) {
 		writeValueToBytes(drxtune0b, 0x0016, LEN_DRX_TUNE0b);
@@ -430,6 +485,8 @@ void DW1000Class::tune() {
 			// TODO proper error/warning handling
 		}
 	}
+	
+	// 保持默认
 	// DRX_TUNE2
 	if(_pacSize == PAC_SIZE_8) {
 		if(_pulseFrequency == TX_PULSE_FREQ_16MHZ) {
@@ -612,6 +669,8 @@ void DW1000Class::tune() {
 	} else {
 		// TODO proper error/warning handling
 	}
+
+	// power是不是可以无脑最大呢？
 	// TX_POWER (enabled smart transmit power control)
 	if(_channel == CHANNEL_1 || _channel == CHANNEL_2) {
 		if(_pulseFrequency == TX_PULSE_FREQ_16MHZ) {
@@ -696,6 +755,7 @@ void DW1000Class::tune() {
 	} else {
 		// TODO proper error/warning handling
 	}
+
 	// Crystal calibration from OTP (if available)
 	byte buf_otp[4];
 	readBytesOTP(0x01E, buf_otp);
@@ -729,6 +789,8 @@ void DW1000Class::tune() {
 /* ###########################################################################
  * #### Interrupt handling ###################################################
  * ######################################################################### */
+
+//中断 未曾涉及的领域
 
 void DW1000Class::handleInterrupt() {
 	// read current status and handle via callbacks
@@ -774,6 +836,7 @@ void DW1000Class::handleInterrupt() {
  * #### Pretty printed device information ####################################
  * ######################################################################### */
 
+// 下面三个函数都是字面意思
 
 void DW1000Class::getPrintableDeviceIdentifier(char msgBuffer[]) {
 	byte data[LEN_DEV_ID];
@@ -799,11 +862,13 @@ void DW1000Class::getPrintableNetworkIdAndShortAddress(char msgBuffer[]) {
 void DW1000Class::getPrintableDeviceMode(char msgBuffer[]) {
 	// data not read from device! data is from class
 	// TODO
-	uint8_t prf;
-	uint16_t plen;
-	uint16_t dr;
-	uint8_t ch;
-	uint8_t pcode;
+
+	uint8_t prf; //脉冲间隔
+	uint16_t plen; //前导码长度
+	uint16_t dr; //data rate
+	uint8_t ch; //channel
+	uint8_t pcode; //前导码？
+	
 	if(_pulseFrequency == TX_PULSE_FREQ_16MHZ) {
 		prf = 16;
 	} else if(_pulseFrequency == TX_PULSE_FREQ_64MHZ) {
@@ -847,6 +912,8 @@ void DW1000Class::getPrintableDeviceMode(char msgBuffer[]) {
 /* ###########################################################################
  * #### DW1000 register read/write ###########################################
  * ######################################################################### */
+
+// 字面意思 一些寄存器的操作
 
 void DW1000Class::readSystemConfigurationRegister() {
 	readBytes(SYS_CFG, NO_SUB, _syscfg, LEN_SYS_CFG);
@@ -896,6 +963,8 @@ void DW1000Class::writeTransmitFrameControlRegister() {
  * #### DW1000 operation functions ###########################################
  * ######################################################################### */
 
+// 字面意思
+
 void DW1000Class::setNetworkId(uint16_t val) {
 	_networkAndAddress[2] = (byte)(val & 0xFF);
 	_networkAndAddress[3] = (byte)((val >> 8) & 0xFF);
@@ -906,6 +975,7 @@ void DW1000Class::setDeviceAddress(uint16_t val) {
 	_networkAndAddress[1] = (byte)((val >> 8) & 0xFF);
 }
 
+// 把十六进制字符转成十六进制数字
 uint8_t DW1000Class::nibbleFromChar(char c) {
 	if(c >= '0' && c <= '9') {
 		return c-'0';
@@ -919,6 +989,7 @@ uint8_t DW1000Class::nibbleFromChar(char c) {
 	return 255;
 }
 
+//把十六进制字符串转化成字节数组
 void DW1000Class::convertToByte(char string[], byte* bytes) {
 	byte    eui_byte[LEN_EUI];
 	// we fill it with the char array under the form of "AA:FF:1C:...."
@@ -928,6 +999,7 @@ void DW1000Class::convertToByte(char string[], byte* bytes) {
 	memcpy(bytes, eui_byte, LEN_EUI);
 }
 
+//字面意思 测温度和电压  地址传递
 void DW1000Class::getTempAndVbat(float& temp, float& vbat) {
 	// follow the procedure from section 6.4 of the User Manual
 	byte step1 = 0x80; writeBytes(RF_CONF, 0x11, &step1, 1);
@@ -943,12 +1015,21 @@ void DW1000Class::getTempAndVbat(float& temp, float& vbat) {
 	temp = (sar_ltemp - _tmeas23C) * 1.14f + 23.0f;
 }
 
+/*
+ *set EUI 字面意思 dw1000的EUI可以用户配置
+ * @param eui
+ * 形式应为"AA:BB:2A:6c....
+ * 不限大小写 
+ *
+*/
 void DW1000Class::setEUI(char eui[]) {
 	byte eui_byte[LEN_EUI];
 	convertToByte(eui, eui_byte);
 	setEUI(eui_byte);
 }
 
+// 两眼一黑 0x01中的EUI可以设置和修改？？？
+// from chatgpt: dw1000的EUI由用户自行配置
 void DW1000Class::setEUI(byte eui[]) {
 	//we reverse the address->
 	byte    reverseEUI[8];
@@ -959,8 +1040,12 @@ void DW1000Class::setEUI(byte eui[]) {
 	writeBytes(EUI, NO_SUB, reverseEUI, LEN_EUI);
 }
 
+//下面讲的都是一些系统配置（0x04）
+
+//这边是一些frame filter的配置 详见用户手册0x04:0x00的前几个bit
 
 //Frame Filtering BIT in the SYS_CFG register
+//frame filter enable or disable
 void DW1000Class::setFrameFilter(boolean val) {
 	setBit(_syscfg, LEN_SYS_CFG, FFEN_BIT, val);
 }
@@ -989,18 +1074,26 @@ void DW1000Class::setFrameFilterAllowReserved(boolean val) {
 	setBit(_syscfg, LEN_SYS_CFG, FFAR_BIT, val);
 }
 
-
+/*
+在数据处理中，双缓冲可以用于提高数据处理的效率。
+例如，在处理大量数据时，可以使用一个缓冲区来存储当前正在处理的数据，另一个缓冲区用于存储下一批数据。
+当当前缓冲区中的数据处理完成后，可以立即切换到下一个缓冲区，从而避免了数据处理的停顿。
+*/
 void DW1000Class::setDoubleBuffering(boolean val) {
 	setBit(_syscfg, LEN_SYS_CFG, DIS_DRXB_BIT, !val);
 }
 
+//设置中断引脚极性
 void DW1000Class::setInterruptPolarity(boolean val) {
 	setBit(_syscfg, LEN_SYS_CFG, HIRQ_POL_BIT, val);
 }
 
+//看上去只是receiver自动重启吧？详见用户手册
 void DW1000Class::setReceiverAutoReenable(boolean val) {
 	setBit(_syscfg, LEN_SYS_CFG, RXAUTR_BIT, val);
 }
+
+//下面这些看上去是关于interrupt的 emmm还得再学学
 
 void DW1000Class::interruptOnSent(boolean val) {
 	setBit(_sysmask, LEN_SYS_MASK, TXFRS_BIT, val);
@@ -1030,6 +1123,7 @@ void DW1000Class::interruptOnAutomaticAcknowledgeTrigger(boolean val) {
 	setBit(_sysmask, LEN_SYS_MASK, AAT_BIT, val);
 }
 
+// 字面意思 设置天线延迟
 void DW1000Class::setAntennaDelay(const uint16_t value) {
 	_antennaDelay.setTimestamp(value);
 	_antennaCalibrated = true;
@@ -1043,12 +1137,22 @@ void DW1000Class::clearInterrupts() {
 	memset(_sysmask, 0, LEN_SYS_MASK);
 }
 
+//idle 即空闲状态 PLL时钟锁定 可以进入TX或RX状态
 void DW1000Class::idle() {
 	memset(_sysctrl, 0, LEN_SYS_CTRL);
+
+	/*
+	Transceiver Off.  
+	When this is set the DW1000 returns to idle mode immediately.
+	Any TX or RX activity that is in progress at that time will be aborted.  
+	The TRXOFF bit will clear as soon as the DW1000 sees it and returns the IC to idle mode.
+	*/
 	setBit(_sysctrl, LEN_SYS_CTRL, TRXOFF_BIT, true);
+	
 	_deviceMode = IDLE_MODE;
 	writeBytes(SYS_CTRL, NO_SUB, _sysctrl, LEN_SYS_CTRL);
 }
+
 
 void DW1000Class::newReceive() {
 	idle();
@@ -1084,6 +1188,7 @@ void DW1000Class::startTransmit() {
 	}
 }
 
+// 这个看起来是要先运行newconfig 然后在进行各种调试 最后在commit
 void DW1000Class::newConfiguration() {
 	idle();
 	readNetworkIdAndDeviceAddress();
@@ -1114,6 +1219,7 @@ void DW1000Class::commitConfiguration() {
 	writeBytes(LDE_IF, LDE_RXANTD_SUB, antennaDelayBytes, LEN_LDE_RXANTD);
 }
 
+// 详见用户手册 0x0D bit:7
 void DW1000Class::waitForResponse(boolean val) {
 	setBit(_sysctrl, LEN_SYS_CTRL, WAIT4RESP_BIT, val);
 }
@@ -1152,47 +1258,89 @@ DW1000Time DW1000Class::setDelay(const DW1000Time& delay) {
 
 
 void DW1000Class::setDataRate(byte rate) {
-	rate &= 0x03;
-	_txfctrl[1] &= 0x83;
-	_txfctrl[1] |= (byte)((rate << 5) & 0xFF);
+	rate &= 0x03; //保留最低两位，将其他位清零
+	_txfctrl[1] &= 0x83; //0x83:1000 0011  按位与运算，将这几位0清零
+	_txfctrl[1] |= (byte)((rate << 5) & 0xFF);  //将rate的最后三位添加到 _txfctrl 的最高三位上
+	
 	// special 110kbps flag
+	// 字面意思
 	if(rate == TRX_RATE_110KBPS) {
 		setBit(_syscfg, LEN_SYS_CFG, RXM110K_BIT, true);
 	} else {
 		setBit(_syscfg, LEN_SYS_CFG, RXM110K_BIT, false);
 	}
+
+	/*
+	DWSFD_BIT enables a non-standard Decawave proprietary SFD sequence.  
+
+	When DWSFD is 0, and TNSSFD and RNSSFD are deasserted low, 
+	then the SFD sequence used by the DW1000 
+	will be the one prescribed by the IEEE 802.15.4-2011 standard. 
+	*/
 	// SFD mode and type (non-configurable, as in Table )
 	if(rate == TRX_RATE_6800KBPS) {
+		// use IEEE 802.15.4-2011 standard. 
 		setBit(_chanctrl, LEN_CHAN_CTRL, DWSFD_BIT, false);
 		setBit(_chanctrl, LEN_CHAN_CTRL, TNSSFD_BIT, false);
 		setBit(_chanctrl, LEN_CHAN_CTRL, RNSSFD_BIT, false);
 	} else if (rate == TRX_RATE_850KBPS) {
+		// use user defined SFD sequence (non-standard 16bit SFD)
 		setBit(_chanctrl, LEN_CHAN_CTRL, DWSFD_BIT, true);
 		setBit(_chanctrl, LEN_CHAN_CTRL, TNSSFD_BIT, true);
 		setBit(_chanctrl, LEN_CHAN_CTRL, RNSSFD_BIT, true);
-	} else {
+	} else { // maybe 110kbps
+		// 用户手册中讲0x21寄存器的时候讲到了就是要这样设置
+		// non-standard 64bit SFD
 		setBit(_chanctrl, LEN_CHAN_CTRL, DWSFD_BIT, true);
 		setBit(_chanctrl, LEN_CHAN_CTRL, TNSSFD_BIT, false);
 		setBit(_chanctrl, LEN_CHAN_CTRL, RNSSFD_BIT, false);
 	}
 	byte sfdLength;
 	if(rate == TRX_RATE_6800KBPS) {
-		sfdLength = 0x08;
+		sfdLength = 0x08; //8
 	} else if(rate == TRX_RATE_850KBPS) {
-		sfdLength = 0x10;
+		sfdLength = 0x10; //16
 	} else {
-		sfdLength = 0x40;
+		sfdLength = 0x40; //64
 	}
+
+	//将sfdlength写入寄存器0x21:0x00
 	writeBytes(USR_SFD, SFD_LENGTH_SUB, &sfdLength, LEN_SFD_LENGTH);
 	_dataRate = rate;
 }
 
+/*
+这个函数修改了 0x08 和 0x1F 变量的值，但是并没有写入寄存器
+*/
 void DW1000Class::setPulseFrequency(byte freq) {
-	freq &= 0x03;
-	_txfctrl[2] &= 0xFC;
-	_txfctrl[2] |= (byte)(freq & 0xFF);
-	_chanctrl[2] &= 0xF3;
-	_chanctrl[2] |= (byte)((freq << 2) & 0xFF);
+	freq &= 0x03; //取最低两位
+
+	//设置tx prf和rx prf相等
+	//tx 可以用4mhz但是rx不能用4mhz
+	_txfctrl[2] &= 0xFC;  //11111100 将最低两位去掉
+	_txfctrl[2] |= (byte)(freq & 0xFF); 
+
+	/*
+	脉冲重复频率（Pulse Repetition Frequency，PRF）是指在测量系统中，每秒钟发射的脉冲数量。
+	PRF是一个重要的参数，因为它影响着系统的测距能力和最大无模糊距离（即不产生距离模糊的最大测量范围）。
+
+	较高的PRF可以提供更好的速度测量分辨率和更快的数据更新率，但可能会导致距离模糊问题，
+	因为发射的下一个脉冲可能会在上一个回波返回之前被发射。
+	而较低的PRF则可以避免距离模糊，但可能会降低速度分辨率和数据更新率。
+
+	在不同的应用中，脉冲重复频率的选择需要在这些因素之间进行权衡，以满足具体的测量需求。
+	*/
+	_chanctrl[2] &= 0xF3; // 0xF3:11110011
+	_chanctrl[2] |= (byte)((freq << 2) & 0xFF); //将freq最后两位写入刚刚抹掉的部分
+	//RXPRF 
+	/*
+	This two bit field selects the PRF used in the receiver. 
+	Values allowed here are 
+	binary 01 to select the 16 MHz PRF or 
+	binary 10 to select the 64 MHz PRF.  
+	Other values are reserved and should not be set. 
+	*/
+
 	_pulseFrequency = freq;
 }
 
@@ -1200,10 +1348,13 @@ byte DW1000Class::getPulseFrequency() {
 	return _pulseFrequency;
 }
 
+//字面意思 设置前导码长度
+//并没有写入寄存器
 void DW1000Class::setPreambleLength(byte prealen) {
-	prealen &= 0x0F;
-	_txfctrl[2] &= 0xC3;
-	_txfctrl[2] |= (byte)((prealen << 2) & 0xFF);
+	prealen &= 0x0F; //00001111
+	_txfctrl[2] &= 0xC3; //11000011
+	_txfctrl[2] |= (byte)((prealen << 2) & 0xFF); //将prealen最后四位写入txfctrl[2]中间四位
+
 	if(prealen == TX_PREAMBLE_LEN_64 || prealen == TX_PREAMBLE_LEN_128) {
 		_pacSize = PAC_SIZE_8;
 	} else if(prealen == TX_PREAMBLE_LEN_256 || prealen == TX_PREAMBLE_LEN_512) {
@@ -1216,11 +1367,13 @@ void DW1000Class::setPreambleLength(byte prealen) {
 	_preambleLength = prealen;
 }
 
+// 帧长度
 void DW1000Class::useExtendedFrameLength(boolean val) {
 	_extendedFrameLength = (val ? FRAME_LENGTH_EXTENDED : FRAME_LENGTH_NORMAL);
 	_syscfg[2] &= 0xFC;
 	_syscfg[2] |= _extendedFrameLength;
 }
+
 
 void DW1000Class::receivePermanently(boolean val) {
 	_permanentReceive = val;
@@ -1231,6 +1384,7 @@ void DW1000Class::receivePermanently(boolean val) {
 	}
 }
 
+//字面意思
 void DW1000Class::setChannel(byte channel) {
 	channel &= 0xF;
 	_chanctrl[0] = ((channel | (channel << 4)) & 0xFF);
@@ -1261,6 +1415,7 @@ void DW1000Class::setChannel(byte channel) {
 	}
 }
 
+// 设置前导码
 void DW1000Class::setPreambleCode(byte preacode) {
 	preacode &= 0x1F;
 	_chanctrl[2] &= 0x3F;
@@ -1324,11 +1479,14 @@ void DW1000Class::setData(byte data[], uint16_t n) {
 	}
 	// transmit data and length
 	writeBytes(TX_BUFFER, NO_SUB, data, n);
+
+	// 表示数据长度
 	_txfctrl[0] = (byte)(n & 0xFF); // 1 byte (regular length + 1 bit)
 	_txfctrl[1] &= 0xE0;
 	_txfctrl[1] |= (byte)((n >> 8) & 0x03);  // 2 added bits if extended length
 }
 
+//set data reload
 void DW1000Class::setData(const String& data) {
 	uint16_t n = data.length()+1;
 	byte* dataBytes = (byte*)malloc(n);
@@ -1338,6 +1496,8 @@ void DW1000Class::setData(const String& data) {
 }
 
 // TODO reorder
+// TX mode:_txfctrl里面提取出length
+// RX mode:从寄存器里面读取接收到信息的长度
 uint16_t DW1000Class::getDataLength() {
 	uint16_t len = 0;
 	if(_deviceMode == TX_MODE) {
@@ -1355,6 +1515,7 @@ uint16_t DW1000Class::getDataLength() {
 	return len;
 }
 
+//从RX寄存器里面读取数据
 void DW1000Class::getData(byte data[], uint16_t n) {
 	if(n <= 0) {
 		return;
@@ -1362,6 +1523,7 @@ void DW1000Class::getData(byte data[], uint16_t n) {
 	readBytes(RX_BUFFER, NO_SUB, data, n);
 }
 
+//reload of get data
 void DW1000Class::getData(String& data) {
 	uint16_t i;
 	uint16_t n = getDataLength(); // number of bytes w/o the two FCS ones
@@ -1380,12 +1542,14 @@ void DW1000Class::getData(String& data) {
 	free(dataBytes);
 }
 
+// 获得tx时间戳 时间戳为发射PHY header发射的时间戳+天线延迟 即信号从天线发射出的时间戳
 void DW1000Class::getTransmitTimestamp(DW1000Time& time) {
 	byte txTimeBytes[LEN_TX_STAMP];
 	readBytes(TX_TIME, TX_STAMP_SUB, txTimeBytes, LEN_TX_STAMP);
 	time.setTimestamp(txTimeBytes);
 }
 
+// 获得rx时间戳 时间戳为天线接收到PHR信号时的时间（计算过天线延迟）
 void DW1000Class::getReceiveTimestamp(DW1000Time& time) {
 	byte rxTimeBytes[LEN_RX_STAMP];
 	readBytes(RX_TIME, RX_STAMP_SUB, rxTimeBytes, LEN_RX_STAMP);
@@ -1395,6 +1559,7 @@ void DW1000Class::getReceiveTimestamp(DW1000Time& time) {
 }
 
 // TODO check function, different type violations between byte and int
+// 字面意思 根据某些已经设置过的参数校准时间戳
 void DW1000Class::correctTimestamp(DW1000Time& timestamp) {
 	// base line dBm, which is -61, 2 dBm steps, total 18 data points (down to -95 dBm)
 	float rxPowerBase     = -(getReceivePower()+61.0f)*0.5f;
@@ -1448,11 +1613,14 @@ void DW1000Class::correctTimestamp(DW1000Time& timestamp) {
 	timestamp -= adjustmentTime;
 }
 
+// 字面意思 从寄存器读取系统时间戳
 void DW1000Class::getSystemTimestamp(DW1000Time& time) {
 	byte sysTimeBytes[LEN_SYS_TIME];
 	readBytes(SYS_TIME, NO_SUB, sysTimeBytes, LEN_SYS_TIME);
 	time.setTimestamp(sysTimeBytes);
 }
+
+// 下面三个函数只是从寄存器读取时间戳
 
 void DW1000Class::getTransmitTimestamp(byte data[]) {
 	readBytes(TX_TIME, TX_STAMP_SUB, data, LEN_TX_STAMP);
@@ -1625,6 +1793,9 @@ float DW1000Class::getReceivePower() {
  * 		The position of the bit to be set.
  * @param val
  *		The boolean value to be set to the given bit position.
+
+ 这个setbit函数只是对本地数组进行操作，并没有与模块交互
+
  */
 void DW1000Class::setBit(byte data[], uint16_t n, uint16_t bit, boolean val) {
 	uint16_t idx;
@@ -1698,7 +1869,7 @@ void DW1000Class::writeValueToBytes(byte data[], int32_t val, uint16_t n) {
 	}
 }
 
-
+// TODO incomplete doc
 /*
  * Read bytes from the DW1000. Number of bytes depend on register length.
  * @param cmd
@@ -1708,7 +1879,6 @@ void DW1000Class::writeValueToBytes(byte data[], int32_t val, uint16_t n) {
  * @param n
  *		The number of bytes expected to be received.
  */
-// TODO incomplete doc
 void DW1000Class::readBytes(byte cmd, uint16_t offset, byte data[], uint16_t n) {
 	byte header[3];
 	uint8_t headerLen = 1;
@@ -1741,8 +1911,24 @@ void DW1000Class::readBytes(byte cmd, uint16_t offset, byte data[], uint16_t n) 
 	SPI.endTransaction();
 }
 
+
 // always 4 bytes
 // TODO why always 4 bytes? can be different, see p. 58 table 10 otp memory map
+// 在模块的OTP memory中操作数据需要通过OTP寄存器来操作
+/*
+OTP是“One-Time Programmable”的缩写，即一次性可编程。
+在电子学和计算机科学中，OTP通常指的是一种特殊类型的非易失性存储器（Non-Volatile Memory, NVM）
+它允许数据被写入一次，之后就不能再被修改或擦除。
+*/
+
+/*
+ * 从OTP memory读取data
+ * @param address
+ * OTP memory的地址
+ * @param data
+ * 将获取的数据写入data中
+ *
+*/
 void DW1000Class::readBytesOTP(uint16_t address, byte data[]) {
 	byte addressBytes[LEN_OTP_ADDR];
 	
@@ -1750,9 +1936,14 @@ void DW1000Class::readBytesOTP(uint16_t address, byte data[]) {
 	// bytes of address
 	addressBytes[0] = (address & 0xFF); //取低位
 	addressBytes[1] = ((address >> 8) & 0xFF); //取高位
+
 	// set address
+	// 在OTP寄存器中写入要写入的OTP memory对应的地址
+	// OTP_IF的意思也许是OTP interface吧
 	writeBytes(OTP_IF, OTP_ADDR_SUB, addressBytes, LEN_OTP_ADDR);
+	
 	// switch into read mode
+	// 好奇怪啊 为什么要写两次OTPRDEN呢？屎山就不动它了（doge）
 	writeByte(OTP_IF, OTP_CTRL_SUB, 0x03); // OTPRDEN | OTPREAD
 	writeByte(OTP_IF, OTP_CTRL_SUB, 0x01); // OTPRDEN
 	// read value/block - 4 bytes

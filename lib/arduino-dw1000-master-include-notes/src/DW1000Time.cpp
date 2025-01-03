@@ -29,6 +29,8 @@ DW1000Time::DW1000Time() {
 	_timestamp = 0;
 }
 
+//下面三种构造函数定义了初试的timestamp
+
 /**
  * Initiates DW1000Time with timestamp
  * @param time timestamp with intervall 1 is approx. 15ps
