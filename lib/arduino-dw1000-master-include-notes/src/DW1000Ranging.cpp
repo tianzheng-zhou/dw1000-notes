@@ -89,6 +89,7 @@ void (* DW1000RangingClass::_handleInactiveDevice)(DW1000Device*) = 0;
  * #### Init and end #######################################################
  * ######################################################################### */
 
+//init
 void DW1000RangingClass::initCommunication(uint8_t myRST, uint8_t mySS, uint8_t myIRQ) {
 	// reset line to the chip
 	_RST              = myRST;
@@ -104,7 +105,7 @@ void DW1000RangingClass::initCommunication(uint8_t myRST, uint8_t mySS, uint8_t 
 	DW1000.select(mySS);
 }
 
-
+// 配置短地址 网络id 设备模式
 void DW1000RangingClass::configureNetwork(uint16_t deviceAddress, uint16_t networkId, const byte mode[]) {
 	// general configuration
 	DW1000.newConfiguration();

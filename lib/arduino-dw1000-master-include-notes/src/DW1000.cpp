@@ -1050,26 +1050,32 @@ void DW1000Class::setFrameFilter(boolean val) {
 	setBit(_syscfg, LEN_SYS_CFG, FFEN_BIT, val);
 }
 
+// 启用后，模块将会只接受与当前网络ID匹配的帧
 void DW1000Class::setFrameFilterBehaveCoordinator(boolean val) {
 	setBit(_syscfg, LEN_SYS_CFG, FFBC_BIT, val);
 }
 
+//允许信标帧
 void DW1000Class::setFrameFilterAllowBeacon(boolean val) {
 	setBit(_syscfg, LEN_SYS_CFG, FFAB_BIT, val);
 }
 
+//允许数据帧
 void DW1000Class::setFrameFilterAllowData(boolean val) {
 	setBit(_syscfg, LEN_SYS_CFG, FFAD_BIT, val);
 }
 
+//允许确定帧
 void DW1000Class::setFrameFilterAllowAcknowledgement(boolean val) {
 	setBit(_syscfg, LEN_SYS_CFG, FFAA_BIT, val);
 }
 
+//允许mac帧
 void DW1000Class::setFrameFilterAllowMAC(boolean val) {
 	setBit(_syscfg, LEN_SYS_CFG, FFAM_BIT, val);
 }
 
+//允许保留帧
 void DW1000Class::setFrameFilterAllowReserved(boolean val) {
 	setBit(_syscfg, LEN_SYS_CFG, FFAR_BIT, val);
 }
@@ -1938,7 +1944,7 @@ void DW1000Class::readBytesOTP(uint16_t address, byte data[]) {
 	addressBytes[1] = ((address >> 8) & 0xFF); //取高位
 
 	// set address
-	// 在OTP寄存器中写入要写入的OTP memory对应的地址
+	// 在OTP寄存器中写入要读取的OTP memory对应的地址
 	// OTP_IF的意思也许是OTP interface吧
 	writeBytes(OTP_IF, OTP_ADDR_SUB, addressBytes, LEN_OTP_ADDR);
 	
