@@ -790,8 +790,8 @@ void DW1000Class::tune() {
  * #### Interrupt handling ###################################################
  * ######################################################################### */
 
-//中断 未曾涉及的领域
 
+//处理中断
 void DW1000Class::handleInterrupt() {
 	// read current status and handle via callbacks
 	readSystemEventStatusRegister();
@@ -820,7 +820,7 @@ void DW1000Class::handleInterrupt() {
 			newReceive();
 			startReceive();
 		}
-	} else if(isReceiveDone() && _handleReceived != 0) {
+	} else if(isReceiveDone() && _handleReceived != 0) { // handleReceived 就是处理接收信息的函数指针
 		(*_handleReceived)();
 		clearReceiveStatus();
 		if(_permanentReceive) {
@@ -1028,7 +1028,6 @@ void DW1000Class::setEUI(char eui[]) {
 	setEUI(eui_byte);
 }
 
-// 两眼一黑 0x01中的EUI可以设置和修改？？？
 // from chatgpt: dw1000的EUI由用户自行配置
 void DW1000Class::setEUI(byte eui[]) {
 	//we reverse the address->
@@ -1099,7 +1098,8 @@ void DW1000Class::setReceiverAutoReenable(boolean val) {
 	setBit(_syscfg, LEN_SYS_CFG, RXAUTR_BIT, val);
 }
 
-//下面这些看上去是关于interrupt的 emmm还得再学学
+//下面这些是关于interrupt的
+//操作sysmask寄存器 表示是否插入中断
 
 void DW1000Class::interruptOnSent(boolean val) {
 	setBit(_sysmask, LEN_SYS_MASK, TXFRS_BIT, val);
@@ -1159,7 +1159,7 @@ void DW1000Class::idle() {
 	writeBytes(SYS_CTRL, NO_SUB, _sysctrl, LEN_SYS_CTRL);
 }
 
-
+// 进入IDLE状态 重置接收配置 设置接收模式
 void DW1000Class::newReceive() {
 	idle();
 	memset(_sysctrl, 0, LEN_SYS_CTRL);

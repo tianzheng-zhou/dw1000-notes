@@ -59,6 +59,15 @@ void DW1000Mac::generateBlinkFrame(byte frame[], byte sourceAddress[], byte sour
 //the short fram usually for Resp, Final, or Report
 //2 bytes for Desination Address and 2 bytes for Source Address
 //total=9 bytes
+/* 生成short mac frame
+ * 
+ *  PAN ID (0xDECA)
+ * 
+ *  @param frame: frame to be generated
+ *  @param sourceShortAddress: source address
+ *  @param destinationShortAddress: destination address
+ *
+ */
 void DW1000Mac::generateShortMACFrame(byte frame[], byte sourceShortAddress[], byte destinationShortAddress[]) {
 	//Frame controle
 	*frame     = FC_1;
