@@ -1549,6 +1549,7 @@ void DW1000Class::getData(String& data) {
 }
 
 // 获得tx时间戳 时间戳为发射PHY header发射的时间戳+天线延迟 即信号从天线发射出的时间戳
+// 将时间戳存入括号内传入的参数
 void DW1000Class::getTransmitTimestamp(DW1000Time& time) {
 	byte txTimeBytes[LEN_TX_STAMP];
 	readBytes(TX_TIME, TX_STAMP_SUB, txTimeBytes, LEN_TX_STAMP);

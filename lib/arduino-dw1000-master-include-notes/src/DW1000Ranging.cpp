@@ -45,7 +45,7 @@ DW1000Mac    DW1000RangingClass::_globalMac;
 //module type (anchor or tag)
 int16_t      DW1000RangingClass::_type; // TODO enum??
 
-// message flow state
+// message flow state 这个东西看上去是用来校验传输是否错误的
 volatile byte    DW1000RangingClass::_expectedMsgId;
 
 // range filter
@@ -354,12 +354,13 @@ DW1000Device* DW1000RangingClass::getDistantDevice() {
  * #### Public methods #######################################################
  * ######################################################################### */
 
+ //标记为active
 void DW1000RangingClass::checkForReset() {
 	uint32_t curMillis = millis();
 	if(!_sentAck && !_receivedAck) {
 		// check if inactive
-		if(curMillis-_lastActivity > _resetPeriod) {
-			resetInactive();
+		if(curMillis-_lastActivity > _resetPeriod) {//reset period 设置为200
+			resetInactive(); //更新active
 		}
 		return; // TODO cc
 	}
@@ -394,15 +395,39 @@ int16_t DW1000RangingClass::detectMessageType(byte datas[]) {
 	}
 }
 
+
+	/*
+	TAG                            ANCHOR
+
+ |                                |
+ |───BLINK───────────────────────>|  ① 设备发现  ANCHOR发现了TAG并记录 添加这个TAG设备
+
+ |                                |
+ |<──RANGING_INIT─────────────────|  ② 连接初始化  在receiveack中 ANCHOR发现了BLINK帧之后 发送RANGING_INIT 并且添加ANCHOR设备
+
+                                    下面的流程 都塞到receivedack中的一个else里面同意处理了
+
+ |───POLL────────────────────────>|  ③ 启动测距（含timePollSent）  给设备列表中的每一个设备都记录timePollSent
+ |                                |
+ |<──POLL_ACK─────────────────────|  ④ 回复ACK（含timePollReceived/timePollAckSent）
+ |                                |
+ |───RANGE───────────────────────>|  ⑤ 请求测距结果（含timePollAckReceived/timeRangeSent）
+ |                                |
+ |<──RANGING_REPORT───────────────|  ⑥ 返回最终距离（含ToF计算结果）
+
+	*/
 void DW1000RangingClass::loop() {
+
+
 	//we check if needed to reset !
 	checkForReset();
 
 	//millis()表示从开机到现在的毫秒数 从esp32获取
 	uint32_t time = millis(); // TODO other name - too close to "timer"
-	if(time-timer > _timerDelay) {
+	if(time-timer > _timerDelay) {//timerdelay=80  这里看起来是80ms后tick一次
 		timer = time;
-		timerTick(); //tag在这个地方发送POLL数据
+		timerTick(); //tag在这个地方发送POLL数据（广播）  并且每20个tick发送一次信标，相当于1600ms发送一次
+		//其余的tick，都在发送poll帧（如果本地已经记录设备）
 	}
 	
 	if(_sentAck) { //发送了数据
@@ -412,11 +437,13 @@ void DW1000RangingClass::loop() {
 		int messageType = detectMessageType(data);
 		
 		if(messageType != POLL_ACK && messageType != POLL && messageType != RANGE)
+			//we have a range report message or error message
 			return;
 		
 		//A msg was sent. We launch the ranging protocole when a message was sent
 		if(_type == ANCHOR) {
 			if(messageType == POLL_ACK) {
+				//本次通信的设备
 				DW1000Device* myDistantDevice = searchDistantDevice(_lastSentToShortAddress);
 				
 				if (myDistantDevice) {
@@ -424,6 +451,7 @@ void DW1000RangingClass::loop() {
 				}
 			}
 		}
+
 		else if(_type == TAG) {
 			if(messageType == POLL) {
 				DW1000Time timePollSent;
@@ -431,11 +459,12 @@ void DW1000RangingClass::loop() {
 				//if the last device we send the POLL is broadcast:
 				if(_lastSentToShortAddress[0] == 0xFF && _lastSentToShortAddress[1] == 0xFF) {
 					//we save the value for all the devices !
+					//这是一个广播的轮询信号
 					for(uint16_t i = 0; i < _networkDevicesNumber; i++) {
 						_networkDevices[i].timePollSent = timePollSent;
 					}
 				}
-				else {
+				else {//not a broatcast
 					//we search the device associated with the last send address
 					DW1000Device* myDistantDevice = searchDistantDevice(_lastSentToShortAddress);
 					//we save the value just for one device
@@ -444,7 +473,7 @@ void DW1000RangingClass::loop() {
 					}
 				}
 			}
-			else if(messageType == RANGE) {
+			else if(messageType == RANGE) { //同上pool 逻辑是一样的
 				DW1000Time timeRangeSent;
 				DW1000.getTransmitTimestamp(timeRangeSent);
 				//if the last device we send the POLL is broadcast:
@@ -479,16 +508,18 @@ void DW1000RangingClass::loop() {
 		int messageType = detectMessageType(data);
 		
 		//we have just received a BLINK message from tag
-		if(messageType == BLINK && _type == ANCHOR) {
+		if(messageType == BLINK && _type == ANCHOR) {//ANCHOR收到了BLINK 并发送RANGING_INIT
 			byte address[8];
 			byte shortAddress[2];
-			_globalMac.decodeBlinkFrame(data, address, shortAddress);
+			_globalMac.decodeBlinkFrame(data, address, shortAddress); //将收到的BLINK帧解析并存入address和shortaddress
+			
 			//we crate a new device with th tag
 			DW1000Device myTag(address, shortAddress);
 			
 			if(addNetworkDevices(&myTag)) {
 
 				// 对mytag执行中断函数
+				//这个函数需要用户进行自定义 库文件里面只是留出了这个接口
 				if(_handleBlinkDevice != 0) {
 					(*_handleBlinkDevice)(&myTag);
 				}
@@ -496,17 +527,17 @@ void DW1000RangingClass::loop() {
 				transmitRangingInit(&myTag);
 				noteActivity();
 			}
-			_expectedMsgId = POLL; //anchor在收到BLINK之后希望收到POLL
+			_expectedMsgId = POLL; //anchor在收到BLINK之后希望收到POLL 
 		}
 
 		else if(messageType == RANGING_INIT && _type == TAG) { //tag接收到RANGING_INIT
 			
 			byte address[2];
-			_globalMac.decodeLongMACFrame(data, address);
+			_globalMac.decodeLongMACFrame(data, address); //解析
 			//we crate a new device with the anchor
 			DW1000Device myAnchor(address, true);
 			
-			if(addNetworkDevices(&myAnchor, true)) {
+			if(addNetworkDevices(&myAnchor, true)) {//同上，中断需要自定义
 				if(_handleNewDevice != 0) {
 					(*_handleNewDevice)(&myAnchor);
 				}
@@ -516,15 +547,15 @@ void DW1000RangingClass::loop() {
 		}
 		else {
 			//we have a short mac layer frame !
-			byte address[2];
+			byte address[2]; //source address
 			_globalMac.decodeShortMACFrame(data, address);
 			
-			
+			//解析mac帧 并提取数据和source address
 			
 			//we get the device which correspond to the message which was sent (need to be filtered by MAC address)
 			DW1000Device* myDistantDevice = searchDistantDevice(address);
 			
-			//什么都没发生
+			//什么都没发生 设备不存在 或者在本地中找不到这个设备（可能是通信发生了错误） 所以直接return了
 			if((_networkDevicesNumber == 0) || (myDistantDevice == nullptr)) {
 				//we don't have the short address of the device in memory
 				if (DEBUG) {
@@ -543,7 +574,7 @@ void DW1000RangingClass::loop() {
 			//then we proceed to range protocole
 			if(_type == ANCHOR) {
 
-				//形式不符合 通信失败
+				//校验错误 通信失败
 				if(messageType != _expectedMsgId) {
 					// unexpected message, start over again (except if already POLL)
 					_protocolFailed = true;
@@ -564,6 +595,8 @@ void DW1000RangingClass::loop() {
 						byte shortAddress[2];
 						memcpy(shortAddress, data+SHORT_MAC_LEN+2+i*4, 2);
 						// 怪不得transmitpoll函数的注释说这是不是对的 emmm还要多看看 好像这是个广播信号
+						//到时候跑不起来再看吧
+						//POLL帧发送的仅仅是单个设备的话，那么这里提取短地址的时候可能会直接拿到replytime从而发生错误
 
 						//we test if the short address is our address
 						if(shortAddress[0] == _currentShortAddress[0] && shortAddress[1] == _currentShortAddress[1]) {
@@ -745,7 +778,7 @@ void DW1000RangingClass::handleReceived() {
 	_receivedAck = true;
 }
 
-
+//更新本设备的活动时间戳
 void DW1000RangingClass::noteActivity() {
 	// update activity timestamp, so that we do not reach "resetPeriod"
 	_lastActivity = millis();
@@ -762,7 +795,7 @@ void DW1000RangingClass::resetInactive() {
 
 void DW1000RangingClass::timerTick() {
 	if(_networkDevicesNumber > 0 && counterForBlink != 0) {
-		if(_type == TAG) {
+		if(_type == TAG) { //发送poll 期待收到pollack
 			_expectedMsgId = POLL_ACK;
 			//send a prodcast poll
 			transmitPoll(nullptr);
@@ -821,6 +854,7 @@ void DW1000RangingClass::transmitBlink() {
 	transmit(data);
 }
 
+//向传入括号的目标发送类型为ranginginit的消息
 void DW1000RangingClass::transmitRangingInit(DW1000Device* myDistantDevice) {
 	transmitInit();
 	//we generate the mac frame for a ranging init message
@@ -843,7 +877,7 @@ void DW1000RangingClass::transmitPoll(DW1000Device* myDistantDevice) {
 	if(myDistantDevice == nullptr) {
 		/*
 		data:
-		0-8: short mac frame (broadcast)
+		0-8: short mac frame (broadcast) SHORT_MAC_LEN指的仅仅只是这一部分
 		9: POLL
 		10: number of devices
 		11~: short address with reply time
@@ -884,6 +918,7 @@ void DW1000RangingClass::transmitPoll(DW1000Device* myDistantDevice) {
 		uint16_t replyTime = myDistantDevice->getReplyTime();
 		memcpy(data+SHORT_MAC_LEN+2, &replyTime, sizeof(uint16_t)); // todo is code correct? maybe wrong?
 		// 可能是对的 他已经定义了目标 就不需要再后面跟着地址+时间了  前面写地址是因为他是个广播mac帧
+		// 这个地方仅仅只有reply时间
 
 		copyShortAddress(_lastSentToShortAddress, myDistantDevice->getByteShortAddress());
 	}
