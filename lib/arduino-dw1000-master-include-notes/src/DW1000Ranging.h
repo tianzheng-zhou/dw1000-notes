@@ -34,6 +34,8 @@
 #include "DW1000Device.h" 
 #include "DW1000Mac.h"
 
+#include <queue>
+
 // messages used in the ranging protocol
 #define POLL 0
 #define POLL_ACK 1
@@ -42,6 +44,12 @@
 #define RANGE_FAILED 255
 #define BLINK 4
 #define RANGING_INIT 5
+
+// user defined
+#define RANGING_REQUEST 6
+#define GRANT 7
+
+#define DEFAULT_SLOT_LENGTH 100 // in ms
 
 #define LEN_DATA 90
 
@@ -124,6 +132,15 @@ public:
 
 
 private:
+
+
+	//用于处理多个tag请求
+	static DW1000Device _currentGrantDevice;
+	static std::queue<DW1000Device> _requestDevices;
+
+	//标识host
+	static boolean _isHost;
+
 	//other devices in the network
 	static DW1000Device _networkDevices[MAX_DEVICES];
 	static volatile uint8_t _networkDevicesNumber;
@@ -192,6 +209,11 @@ private:
 	static void transmit(byte datas[], DW1000Time time);
 	static void transmitBlink();
 	static void transmitRangingInit(DW1000Device* myDistantDevice);
+
+	//我的自定义函数
+	static void transmitRangingRequest();
+	static void transmitGrant(DW1000Device* myDistantDevice);
+
 	static void transmitPollAck(DW1000Device* myDistantDevice);
 	static void transmitRangeReport(DW1000Device* myDistantDevice);
 	static void transmitRangeFailed(DW1000Device* myDistantDevice);

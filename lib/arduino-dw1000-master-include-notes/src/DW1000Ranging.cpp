@@ -32,6 +32,12 @@
 
 DW1000RangingClass DW1000Ranging;
 
+// 用于处理多个TAG请求
+DW1000Device DW1000RangingClass::_currentGrantDevice;
+std::queue<DW1000Device> DW1000RangingClass::_requestDevices;
+
+// 标识主机
+boolean DW1000RangingClass::_isHost = false;
 
 //other devices we are going to communicate with which are on our network:
 DW1000Device DW1000RangingClass::_networkDevices[MAX_DEVICES];
@@ -45,7 +51,7 @@ DW1000Mac    DW1000RangingClass::_globalMac;
 //module type (anchor or tag)
 int16_t      DW1000RangingClass::_type; // TODO enum??
 
-// message flow state 这个东西看上去是用来校验传输是否错误的
+// message flow state 在接收信息的时候这个东西看上去是用来校验传输是否错误的 需要调整loop中的逻辑
 volatile byte    DW1000RangingClass::_expectedMsgId;
 
 // range filter
@@ -391,6 +397,7 @@ int16_t DW1000RangingClass::detectMessageType(byte datas[]) {
 	}
 	else if(datas[0] == FC_1 && datas[1] == FC_2_SHORT) {
 		//we have a short mac frame message (poll, range, range report, etc..)
+		//and range request, grant
 		return datas[SHORT_MAC_LEN];
 	}
 }
@@ -406,6 +413,11 @@ int16_t DW1000RangingClass::detectMessageType(byte datas[]) {
  |<──RANGING_INIT─────────────────|  ② 连接初始化  在receiveack中 ANCHOR发现了BLINK帧之后 发送RANGING_INIT 并且添加ANCHOR设备
 
                                     下面的流程 都塞到receivedack中的一个else里面同意处理了
+
+request:
+|----RANGING_REQUEST-------->|  tag请求测距
+|<------GRANT----------------|  host回复测距请求 并且回复到所有ANCHOR设备
+
 
  |───POLL────────────────────────>|  ③ 启动测距（含timePollSent）  给设备列表中的每一个设备都记录timePollSent
  |                                |
@@ -436,6 +448,8 @@ void DW1000RangingClass::loop() {
 		// TODO cc
 		int messageType = detectMessageType(data);
 		
+		//这里还需要考虑range request和grant
+
 		if(messageType != POLL_ACK && messageType != POLL && messageType != RANGE)
 			//we have a range report message or error message
 			return;
@@ -864,6 +878,63 @@ void DW1000RangingClass::transmitRangingInit(DW1000Device* myDistantDevice) {
 	
 	copyShortAddress(_lastSentToShortAddress, myDistantDevice->getByteShortAddress());
 	
+	transmit(data);
+}
+
+//下面两个是我自己写的
+
+/*
+给host发送ranging request
+host地址为0xAA 0xAA
+*/
+void DW1000RangingClass::transmitRangingRequest() {
+	/*
+	ranging request也是一个广播信号，给ANCHOR发送 或者只是给HOST发送？
+	*/
+	transmitInit();	
+
+	// 下面生成的是标准的short mac frame
+
+	byte host_address[2] = {0xAA,0xAA};
+
+	_globalMac.generateShortMACFrame(data, _currentShortAddress, host_address);
+
+	data[SHORT_MAC_LEN]   = RANGING_REQUEST;
+
+	// 接下来要发送的是自定义的一些数据
+	// 暂时还不知道说些什么
+
+	//data[SHORT_MAC_LEN+1] = 1; // 1 device
+
+	copyShortAddress(_lastSentToShortAddress, host_address);
+
+
+
+	transmit(data);
+}
+
+/*
+grant为host发送的同意请求消息
+看来还需要定义一个类似队列的东西来安排设备的顺序
+
+*/
+void DW1000RangingClass::transmitGrant(DW1000Device* myDistantDevice) {
+	transmitInit();
+
+	byte shortbroadcast[2] = {0xFF, 0xFF};
+	_globalMac.generateShortMACFrame(data, _currentShortAddress, shortbroadcast);
+	
+	data[SHORT_MAC_LEN] = GRANT;
+
+	// 接下来要发送的是自定义的一些数据
+	
+	//许可的tag地址
+	memcpy(data+SHORT_MAC_LEN+1, myDistantDevice->getByteShortAddress(), 2);
+
+	// 时隙长度（单位ms）
+	uint16_t slot_length = DEFAULT_SLOT_LENGTH;
+	memcpy(data+SHORT_MAC_LEN+3, &slot_length, 2);
+
 	transmit(data);
 }
 
