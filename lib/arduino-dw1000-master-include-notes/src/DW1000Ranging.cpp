@@ -30,14 +30,31 @@
 #include "DW1000Ranging.h"
 #include "DW1000Device.h"
 
+
 DW1000RangingClass DW1000Ranging;
 
 // 用于处理多个TAG请求
-DW1000Device DW1000RangingClass::_currentGrantDevice;
-std::queue<DW1000Device> DW1000RangingClass::_requestDevices;
+byte DW1000RangingClass::_currentGrantAddress[2];
+boolean DW1000RangingClass::_isCommunicating = false;
+
+/*
+队列的使用
+push(val): 将元素插入队尾。
+pop(): 移除队首元素（不返回被删元素）。
+front(): 返回队首元素的引用。
+
+注意！！！队列里的元素是array而不是原生数组！！！
+*/
+std::deque<std::array<byte, 2>> DW1000RangingClass::_requestAddress;
+
+byte DW1000RangingClass::_expectAddress[2];
+
 
 // 标识主机
 boolean DW1000RangingClass::_isHost = false;
+
+// delaytime after request denied
+u_int16_t DW1000RangingClass::_requestDeniedDelay;
 
 //other devices we are going to communicate with which are on our network:
 DW1000Device DW1000RangingClass::_networkDevices[MAX_DEVICES];
@@ -415,17 +432,21 @@ int16_t DW1000RangingClass::detectMessageType(byte datas[]) {
                                     下面的流程 都塞到receivedack中的一个else里面同意处理了
 
 request:
-|----RANGING_REQUEST-------->|  tag请求测距
+|todo----RANGING_REQUEST-------->|  tag请求测距
 |<------GRANT----------------|  host回复测距请求 并且回复到所有ANCHOR设备
+
+ranging_request看上去不需要添加sentack
 
 
  |───POLL────────────────────────>|  ③ 启动测距（含timePollSent）  给设备列表中的每一个设备都记录timePollSent
  |                                |
- |<──POLL_ACK─────────────────────|  ④ 回复ACK（含timePollReceived/timePollAckSent）
+ |<──POLL_ACK─────────────────────|  ④ 回复ACK（含timePollReceived）
  |                                |
- |───RANGE───────────────────────>|  ⑤ 请求测距结果（含timePollAckReceived/timeRangeSent）
+ |───RANGE───────────────────────>|  ⑤ 请求测距结果（含timePollAckReceived）
  |                                |
- |<──RANGING_REPORT───────────────|  ⑥ 返回最终距离（含ToF计算结果）
+ |<──RANGING_REPORT───────────────|  ⑥ 返回最终距离（含timePollAckSent/timeRangeReceived）
+ 
+ timeRangeSent
 
 	*/
 void DW1000RangingClass::loop() {
@@ -450,8 +471,12 @@ void DW1000RangingClass::loop() {
 		
 		//这里还需要考虑range request和grant
 
-		if(messageType != POLL_ACK && messageType != POLL && messageType != RANGE)
-			//we have a range report message or error message
+		if(messageType != POLL_ACK && messageType != POLL && messageType != RANGE && messageType!=GRANT)
+			//we have a range report message or error message 
+			
+			// or range request
+			// grant
+
 			return;
 		
 		//A msg was sent. We launch the ranging protocole when a message was sent
@@ -462,6 +487,29 @@ void DW1000RangingClass::loop() {
 				
 				if (myDistantDevice) {
 					DW1000.getTransmitTimestamp(myDistantDevice->timePollAckSent);
+				}
+			}else if(messageType == GRANT) {
+				if (_isHost){
+					//host 发送了grant
+					if(_isCommunicating){
+						if(_requestAddress.size() > 0){
+							std::array<byte, 2> address_array = _requestAddress.front();
+							_requestAddress.pop_front();
+							//将这个设备的shortaddress 赋值给currentgrantaddress
+							_currentGrantAddress[0] = address_array[0];
+							_currentGrantAddress[1] = address_array[1];
+							_isCommunicating = true;
+
+						}else{
+							_isCommunicating = false;
+						}
+					}else{
+						Serial.println("error:没有可以通信的设备");
+					}
+
+
+				}else{
+					Serial.println("error:不是主机的设备错误发送了GRANT帧");
 				}
 			}
 		}
@@ -521,6 +569,7 @@ void DW1000RangingClass::loop() {
 		
 		int messageType = detectMessageType(data);
 		
+		//下面两个是关于初始化的
 		//we have just received a BLINK message from tag
 		if(messageType == BLINK && _type == ANCHOR) {//ANCHOR收到了BLINK 并发送RANGING_INIT
 			byte address[8];
@@ -560,6 +609,7 @@ void DW1000RangingClass::loop() {
 			noteActivity();
 		}
 		else {
+			//解析short mac layer frame
 			//we have a short mac layer frame !
 			byte address[2]; //source address
 			_globalMac.decodeShortMACFrame(data, address);
@@ -593,8 +643,55 @@ void DW1000RangingClass::loop() {
 					// unexpected message, start over again (except if already POLL)
 					_protocolFailed = true;
 				}
+				
+				if(messageType == RANGING_REQUEST && _isHost == true) {
+					//host receive a range request
+					//we need to reply with a grant
 
-				if(messageType == POLL) { //接收到POLL信号
+					if(_isCommunicating==false){
+						//memcpy(_lastSentToShortAddress, address, 2);
+						memcpy(_currentGrantAddress, address, 2);
+						_isCommunicating = true;
+					}
+					else{
+						//_isCommunicating==true
+						std::array<byte, 2> shortAddress;
+						memcpy(shortAddress.data(), address, 2);
+						// 把这个地址加入到requestAddress队列中
+
+						//如果这个地址已经在requestAddress队列中了
+						//那么就不添加了
+						for(uint16_t i = 0; i < _requestAddress.size(); i++) {
+							if(_requestAddress[i][0] == shortAddress[0] && _requestAddress[i][1] == shortAddress[1]) {
+								return;
+							}
+						}
+
+						_requestAddress.push_back(shortAddress);
+					}
+
+					transmitGrant(myDistantDevice);
+					
+					_expectedMsgId = POLL;
+
+					noteActivity();
+					return;
+
+				}
+				else if(messageType == GRANT && _isHost == false) {
+					// anchor receive a grant frame
+
+					//其他ANCHOR在这段时间内只接收这个地址的信息
+					memcpy(_expectAddress, data+SHORT_MAC_LEN+4, 2);
+					
+					_expectedMsgId = POLL;
+
+					noteActivity();
+					return;
+
+				}
+
+				else if(messageType == POLL) { //接收到POLL信号
 					//we receive a POLL which is a broacast message
 					//we need to grab info about it
 					
@@ -715,6 +812,48 @@ void DW1000RangingClass::loop() {
 					_expectedMsgId = POLL_ACK;
 					return;
 				}
+				
+				if(messageType == GRANT){
+					//grant frame
+					byte shortaddress[2];
+					memcpy(shortaddress, data+SHORT_MAC_LEN+4, 2);
+					if(shortaddress[0]==_currentShortAddress[0] && shortaddress[1]==_currentShortAddress[1]){
+						//we have a grant frame for us
+						_expectedMsgId = POLL_ACK;
+						transmitPoll(nullptr);
+					}else{
+						//for others
+
+						u_int16_t delaytime;
+
+						memcpy(&delaytime, data+SHORT_MAC_LEN+2, 2);
+
+						//读取设备数量
+						u_int8_t device_number;
+						memcpy(&device_number, data+SHORT_MAC_LEN+1, 1);
+						
+
+						//获取当前grant帧中的请求队列
+						_requestAddress.clear();
+						for(uint8_t i=0; i<device_number-1; i++){
+
+							std::array<byte, 2> shortaddress;
+							memcpy(shortaddress.data(), data+SHORT_MAC_LEN+6+4*i, 2);
+							_requestAddress.push_back(shortaddress);
+						}
+
+						//问题来了 我并不知道此时的host是否接收到原来的request
+						//所以GRANT帧里面要加东西了
+						
+						// todo 需要做一个延时的变量 类似activity
+						
+						_requestDeniedDelay = delaytime;
+
+
+					}
+
+				}
+
 				if(messageType == POLL_ACK) {
 					DW1000.getReceiveTimestamp(myDistantDevice->timePollAckReceived);
 					//we note activity for our device:
@@ -927,13 +1066,31 @@ void DW1000RangingClass::transmitGrant(DW1000Device* myDistantDevice) {
 	data[SHORT_MAC_LEN] = GRANT;
 
 	// 接下来要发送的是自定义的一些数据
-	
-	//许可的tag地址
-	memcpy(data+SHORT_MAC_LEN+1, myDistantDevice->getByteShortAddress(), 2);
 
+	// 此时许可的tag+队列中的tag数量
+	u_int8_t number_devices = 1+_requestAddress.size();
+	memcpy(data+SHORT_MAC_LEN+1, &number_devices, 1); 
+	
 	// 时隙长度（单位ms）
 	uint16_t slot_length = DEFAULT_SLOT_LENGTH;
-	memcpy(data+SHORT_MAC_LEN+3, &slot_length, 2);
+	memcpy(data+SHORT_MAC_LEN+2, &slot_length, 2);
+
+	// 许可的tag地址
+	memcpy(data+SHORT_MAC_LEN+4, myDistantDevice->getByteShortAddress(), 2);
+
+	for(int i = 0; i < _requestAddress.size(); i++){
+
+
+		byte address[2];
+
+		memcpy(address, _requestAddress[i].data(), 2);
+
+		memcpy(data+SHORT_MAC_LEN+6+2*i, address, 2);
+		
+
+	}
+	//许可的tag地址
+
 
 	transmit(data);
 }
@@ -1011,7 +1168,6 @@ void DW1000RangingClass::transmitPollAck(DW1000Device* myDistantDevice) {
 void DW1000RangingClass::transmitRange(DW1000Device* myDistantDevice) {
 	//transmit range need to accept broadcast for multiple anchor
 	transmitInit();
-	
 	
 	if(myDistantDevice == nullptr) {
 		//we need to set our timerDelay:

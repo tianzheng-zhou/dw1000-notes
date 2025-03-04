@@ -133,6 +133,7 @@ void DW1000Mac::decodeBlinkFrame(byte frame[], byte address[], byte shortAddress
 	reverseArray(shortAddress, reverseShortAddress, 2);
 }
 
+// 解码出来之后 将所有数据存入frame 短地址存入address
 void DW1000Mac::decodeShortMACFrame(byte frame[], byte address[]) {
 	byte reverseAddress[2];
 	memcpy(reverseAddress, frame+7, 2);

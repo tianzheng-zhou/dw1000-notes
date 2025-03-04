@@ -34,7 +34,8 @@
 #include "DW1000Device.h" 
 #include "DW1000Mac.h"
 
-#include <queue>
+#include <array>
+#include <deque>
 
 // messages used in the ranging protocol
 #define POLL 0
@@ -135,11 +136,16 @@ private:
 
 
 	//用于处理多个tag请求
-	static DW1000Device _currentGrantDevice;
-	static std::queue<DW1000Device> _requestDevices;
+	static byte _currentGrantAddress[2];
+	static boolean _isCommunicating;
+	static std::deque<std::array<byte, 2>> _requestAddress;
 
 	//标识host
 	static boolean _isHost;
+
+	static byte _expectAddress[2];
+
+	static u_int16_t _requestDeniedDelay;
 
 	//other devices in the network
 	static DW1000Device _networkDevices[MAX_DEVICES];

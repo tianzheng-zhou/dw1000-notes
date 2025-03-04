@@ -19,6 +19,7 @@ reg:0x36:0x00 bit:23 KHZCKEN 其中kilohertz clock是什么？ emmm 看reg:0x36:
 需要修改的内容：
 1. expectedmsgid
 2. timer中默认发送的帧类型
+3. lastsenttoshortaddress这个变量的作用 可能会导致bug（暂时未知）
 
 初步搜索，决定使用**时分多址**的方案实行多TAG
 并且使用主机动态调动的具体方案
